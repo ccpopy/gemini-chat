@@ -635,29 +635,34 @@ class RemoteBrowserSession:
                     except Exception as e:
                         logger.warning(f"从页面链接获取 group_id 失败: {e}")
 
-            # 从页面脚本中提取 projectNumber（更可靠的方式）
-            if not project_id:
-                try:
-                    # 尝试从 WIZ_global_data 中提取 projectNumber
-                    project_id = await self._page.evaluate("""
-                        () => {
-                            try {
-                                if (window.WIZ_global_data && window.WIZ_global_data.LqbZsd) {
-                                    const data = JSON.parse(window.WIZ_global_data.LqbZsd);
-                                    if (data.engineResourceDetails && data.engineResourceDetails.projectNumber) {
-                                        return data.engineResourceDetails.projectNumber;
-                                    }
-                                }
-                            } catch (e) {
-                                console.error('提取 projectNumber 失败:', e);
+            # 从页面脚本中提取 projectNumber 和 userPrincipal
+            wiz_data = None
+            try:
+                # 尝试从 WIZ_global_data 中提取 projectNumber 和 userPrincipal
+                wiz_data = await self._page.evaluate("""
+                    () => {
+                        try {
+                            if (window.WIZ_global_data && window.WIZ_global_data.LqbZsd) {
+                                const data = JSON.parse(window.WIZ_global_data.LqbZsd);
+                                return {
+                                    projectNumber: data.engineResourceDetails?.projectNumber || null,
+                                    userPrincipal: data.anonymousUser?.userPrincipal || null
+                                };
                             }
-                            return null;
+                        } catch (e) {
+                            console.error('提取 WIZ_global_data 失败:', e);
                         }
-                    """)
-                    if project_id:
+                        return null;
+                    }
+                """)
+                if wiz_data:
+                    if wiz_data.get("projectNumber") and not project_id:
+                        project_id = wiz_data["projectNumber"]
                         logger.info(f"从页面脚本获取到 project_id: {project_id}")
-                except Exception as e:
-                    logger.warning(f"从页面脚本获取 project_id 失败: {e}")
+                    if wiz_data.get("userPrincipal"):
+                        logger.info(f"从页面脚本获取到 userPrincipal: {wiz_data['userPrincipal']}")
+            except Exception as e:
+                logger.warning(f"从页面脚本获取 WIZ_global_data 失败: {e}")
 
             # 获取 cookies - 收集 auth.business.gemini.google 和 business.gemini.google 域的全部 cookie
             cookies = await self._context.cookies()
@@ -696,20 +701,24 @@ class RemoteBrowserSession:
                 # 获取当前使用的用户数据目录
                 profile_dir = self.get_profile_dir()
 
+                # 直接使用从 WIZ_global_data 获取的 userPrincipal 作为 username
+                username = wiz_data.get("userPrincipal") if wiz_data else None
+
                 self._login_config = {
                     "secure_c_ses": secure_c_ses,
                     "host_c_oses": host_c_oses,
                     "nid": nid,
                     "csesidx": csesidx,
                     "group_id": group_id,
-                    "project_id": project_id,  # 新增：用于构造图片下载 URL
+                    "project_id": project_id,  # 构造图片下载 URL
                     "cookie_raw": cookie_raw,  # 完整的 raw cookie header
                     "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "cookie_profile_dir": profile_dir,  # 记录 cookie 来源目录
+                    "username": username,  # 直接从 WIZ_global_data 获取
                 }
 
                 # 日志记录 cookie 保存信息
-                logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, group_id={group_id}, project_id={project_id}, profile_dir={profile_dir}")
+                logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, group_id={group_id}, project_id={project_id}, username={username}, profile_dir={profile_dir}")
                 logger.debug(f"Cookie 长度: secure_c_ses={len(secure_c_ses) if secure_c_ses else 0}, "
                            f"host_c_oses={len(host_c_oses) if host_c_oses else 0}, "
                            f"nid={len(nid) if nid else 0}, "
@@ -724,18 +733,6 @@ class RemoteBrowserSession:
                     "type": "login_success",
                     "config": self._login_config,
                 })
-
-                try:
-                    from .auth import check_session_status
-                    session_status = check_session_status(self._login_config)
-                    username = session_status.get("username")
-                    if username:
-                        self._login_config["username"] = username
-                        logger.info(f"获取到用户邮箱: {username}")
-                    elif session_status.get("warning") and session_status.get("valid"):
-                        logger.info("list-sessions 返回 warning 但 JWT 可用，跳过 username 获取")
-                except Exception as e:
-                    logger.warning(f"获取用户邮箱失败: {e}")
             else:
                 # 凭证不完整，提供详细提示
                 missing = []

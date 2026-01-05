@@ -238,7 +238,6 @@ def save_config(update: dict) -> dict:
     cfg = load_config()
 
     # 如果 update 包含旧格式的顶层字段，映射到新结构
-    # 新增 cookie_raw、cookie_profile_dir 和 username 字段
     session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "project_id",
                     "cookies_saved_at", "saved_at", "cookie_raw", "cookie_profile_dir", "username"]
     for key in session_keys:
